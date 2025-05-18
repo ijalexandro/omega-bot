@@ -3,7 +3,8 @@ require('dotenv').config();
 const express = require('express');
 const fetch = global.fetch || require('node-fetch');
 const { Client } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const qrcodeTerminal = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const { createClient } = require('@supabase/supabase-js');
 
 const {
@@ -12,13 +13,12 @@ const {
   SESSION_BUCKET,
   SESSION_FILE,
   N8N_WEBHOOK_URL,
+  BASE_URL,
   PORT
 } = process.env;
 
-// Inicializa Supabase
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Funciones para guardar/recuperar sesión en Supabase Storage
 async function getSession() {
   const { data, error } = await supabase
     .storage.from(SESSION_BUCKET)
@@ -30,13 +30,31 @@ async function getSession() {
 async function saveSession(session) {
   const { error } = await supabase
     .storage.from(SESSION_BUCKET)
-    .upload(SESSION_FILE, Buffer.from(JSON.stringify(session)), { upsert: true });
+    .upload(SESSION_FILE,
+      Buffer.from(JSON.stringify(session)),
+      { upsert: true }
+    );
   if (error) console.error('Error guardando sesión:', error.message);
 }
 
-// Crea servidor Express
 const app = express();
 app.use(express.json());
+
+let whatsappClient;
+let latestQr = null;
+
+// Reemplazamos /qr para devolver la imagen PNG
+app.get('/qr', async (req, res) => {
+  if (!latestQr) return res.status(404).send('QR no disponible');
+  try {
+    const pngBuffer = await QRCode.toBuffer(latestQr, { type: 'png' });
+    res.set('Content-Type', 'image/png');
+    return res.send(pngBuffer);
+  } catch (err) {
+    console.error('Error generando PNG:', err);
+    return res.status(500).send('Error generando imagen QR');
+  }
+});
 
 // Endpoint para que n8n envíe mensajes por WhatsApp
 app.post('/send-message', async (req, res) => {
@@ -51,31 +69,23 @@ app.post('/send-message', async (req, res) => {
   }
 });
 
-// Endpoint opcional para debug / recibir eventos de WhatsApp
+// (Opcional) debug de webhooks entrantes
 app.post('/webhook/new-message', (req, res) => {
   console.log('Webhook hit:', req.body);
   res.sendStatus(200);
 });
 
-// Endpoint para exponer el texto puro del QR
-let latestQr = null;
-app.get('/qr', (req, res) => {
-  if (!latestQr) return res.status(404).send('QR no disponible');
-  res.json({ qr: latestQr });
-});
-
-// Función principal para inicializar WhatsApp
-let whatsappClient;
 async function initWhatsApp() {
   const sessionData = await getSession();
   const client = new Client({ session: sessionData });
 
-  // Genera y muestra QR en ASCII
   client.on('qr', qr => {
     latestQr = qr;
+    // ASCII en consola
     console.log('--- QR RECEIVED ---');
-    qrcode.generate(qr, { small: true });
-    console.log('Escanea ese código QR con tu WhatsApp.');
+    qrcodeTerminal.generate(qr, { small: true });
+    // URL de la imagen QR
+    console.log(`Escanea usando: ${BASE_URL}/qr`);
   });
 
   client.on('authenticated', session => {
@@ -108,10 +118,9 @@ async function initWhatsApp() {
   whatsappClient = client;
 }
 
-// Arranca todo
 initWhatsApp();
 
-// Levanta servidor HTTP
+// Arranca servidor HTTP
 const port = PORT || 3000;
 app.listen(port, () => {
   console.log(`Server escuchando en puerto ${port}`);
