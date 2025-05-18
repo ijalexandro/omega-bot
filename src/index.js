@@ -2,7 +2,8 @@
 require('dotenv').config();
 const express = require('express');
 const fetch = global.fetch || require('node-fetch');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client } = require('whatsapp-web.js');
+const qrcode = require('qrcode-terminal');
 const { createClient } = require('@supabase/supabase-js');
 
 const {
@@ -14,17 +15,16 @@ const {
   PORT
 } = process.env;
 
-// Supabase client
+// Cliente Supabase
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Funciones para sesión
+// Carga/guarda sesión en Storage
 async function getSession() {
   const { data, error } = await supabase
     .storage.from(SESSION_BUCKET)
     .download(SESSION_FILE);
   if (error || !data) return null;
-  const text = await data.text();
-  return JSON.parse(text);
+  return JSON.parse(await data.text());
 }
 
 async function saveSession(session) {
@@ -38,7 +38,7 @@ async function saveSession(session) {
 const app = express();
 app.use(express.json());
 
-// Endpoint para que n8n envíe mensajes
+// Endpoint para enviar mensajes desde n8n
 app.post('/send-message', async (req, res) => {
   const { to, body } = req.body;
   if (!whatsappClient) return res.status(503).send('WhatsApp no inicializado');
@@ -51,7 +51,7 @@ app.post('/send-message', async (req, res) => {
   }
 });
 
-// (Opcional) endpoint de debug
+// Debug: recibe eventos de WhatsApp (opcional)
 app.post('/webhook/new-message', (req, res) => {
   console.log('Webhook hit:', req.body);
   res.sendStatus(200);
@@ -59,22 +59,26 @@ app.post('/webhook/new-message', (req, res) => {
 
 let whatsappClient;
 async function initWhatsApp() {
-  // Saneamos el clientId (solo alfanumérico, underscores o guiones)
-  const rawId = SESSION_FILE || 'omega_session';
-  const clientId = rawId.replace(/[^a-zA-Z0-9_-]/g, '_');
-
   const sessionData = await getSession();
-  whatsappClient = new Client({
-    authStrategy: new LocalAuth({ clientId }),
-    session: sessionData
+
+  // Cliente con sesión legacy
+  const client = new Client({ session: sessionData });
+
+  // Mostrar QR en logs (ASCII) para escanear
+  client.on('qr', qr => {
+    console.log('--- QR RECEIVED ---');
+    qrcode.generate(qr, { small: true });
+    console.log('Escanea ese código QR con tu WhatsApp.');
   });
 
-  whatsappClient.on('authenticated', session => saveSession(session));
-  whatsappClient.on('auth_failure', msg => console.error('Auth failure:', msg));
-  whatsappClient.on('ready', () => console.log('WhatsApp listo'));
-  whatsappClient.on('message', async msg => {
+  client.on('authenticated', session => {
+    console.log('✅ Authenticated, guardando sesión…');
+    saveSession(session);
+  });
+  client.on('auth_failure', msg => console.error('❌ Auth failure:', msg));
+  client.on('ready', () => console.log('✅ WhatsApp listo'));
+  client.on('message', async msg => {
     console.log('Mensaje entrante:', msg.from, msg.body);
-    // Forward a n8n
     try {
       await fetch(N8N_WEBHOOK_URL, {
         method: 'POST',
@@ -86,11 +90,12 @@ async function initWhatsApp() {
     }
   });
 
-  await whatsappClient.initialize();
+  await client.initialize();
+  whatsappClient = client;
 }
 
 initWhatsApp();
 
-// Arrancamos servidor HTTP
+// Arranca servidor HTTP
 const port = PORT || 3000;
 app.listen(port, () => console.log(`Server escuchando en puerto ${port}`));
