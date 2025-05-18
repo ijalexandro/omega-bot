@@ -15,10 +15,10 @@ const {
   PORT
 } = process.env;
 
-// Cliente Supabase
+// Inicializa Supabase
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Carga/guarda sesión en Storage
+// Funciones para guardar/recuperar sesión en Supabase Storage
 async function getSession() {
   const { data, error } = await supabase
     .storage.from(SESSION_BUCKET)
@@ -34,11 +34,11 @@ async function saveSession(session) {
   if (error) console.error('Error guardando sesión:', error.message);
 }
 
-// Express
+// Crea servidor Express
 const app = express();
 app.use(express.json());
 
-// Endpoint para enviar mensajes desde n8n
+// Endpoint para que n8n envíe mensajes por WhatsApp
 app.post('/send-message', async (req, res) => {
   const { to, body } = req.body;
   if (!whatsappClient) return res.status(503).send('WhatsApp no inicializado');
@@ -46,26 +46,33 @@ app.post('/send-message', async (req, res) => {
     await whatsappClient.sendMessage(to, body);
     return res.json({ status: 'enviado' });
   } catch (err) {
-    console.error(err);
+    console.error('Error enviando mensaje:', err);
     return res.status(500).json({ error: err.message });
   }
 });
 
-// Debug: recibe eventos de WhatsApp (opcional)
+// Endpoint opcional para debug / recibir eventos de WhatsApp
 app.post('/webhook/new-message', (req, res) => {
   console.log('Webhook hit:', req.body);
   res.sendStatus(200);
 });
 
+// Endpoint para exponer el texto puro del QR
+let latestQr = null;
+app.get('/qr', (req, res) => {
+  if (!latestQr) return res.status(404).send('QR no disponible');
+  res.json({ qr: latestQr });
+});
+
+// Función principal para inicializar WhatsApp
 let whatsappClient;
 async function initWhatsApp() {
   const sessionData = await getSession();
-
-  // Cliente con sesión legacy
   const client = new Client({ session: sessionData });
 
-  // Mostrar QR en logs (ASCII) para escanear
+  // Genera y muestra QR en ASCII
   client.on('qr', qr => {
+    latestQr = qr;
     console.log('--- QR RECEIVED ---');
     qrcode.generate(qr, { small: true });
     console.log('Escanea ese código QR con tu WhatsApp.');
@@ -75,8 +82,15 @@ async function initWhatsApp() {
     console.log('✅ Authenticated, guardando sesión…');
     saveSession(session);
   });
-  client.on('auth_failure', msg => console.error('❌ Auth failure:', msg));
-  client.on('ready', () => console.log('✅ WhatsApp listo'));
+
+  client.on('auth_failure', msg => {
+    console.error('❌ Auth failure:', msg);
+  });
+
+  client.on('ready', () => {
+    console.log('✅ WhatsApp listo');
+  });
+
   client.on('message', async msg => {
     console.log('Mensaje entrante:', msg.from, msg.body);
     try {
@@ -94,8 +108,11 @@ async function initWhatsApp() {
   whatsappClient = client;
 }
 
+// Arranca todo
 initWhatsApp();
 
-// Arranca servidor HTTP
+// Levanta servidor HTTP
 const port = PORT || 3000;
-app.listen(port, () => console.log(`Server escuchando en puerto ${port}`));
+app.listen(port, () => {
+  console.log(`Server escuchando en puerto ${port}`);
+});
