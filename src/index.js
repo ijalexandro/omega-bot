@@ -1,7 +1,7 @@
 // src/index.js
 require('dotenv').config();
 const express = require('express');
-const fetch = global.fetch || require('node-fetch'); // Node 18+ ya trae fetch; si no, instala node-fetch
+const fetch = global.fetch || require('node-fetch');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const { createClient } = require('@supabase/supabase-js');
 
@@ -19,16 +19,12 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // Funciones para sesión
 async function getSession() {
-  try {
-    const { data, error } = await supabase
-      .storage.from(SESSION_BUCKET)
-      .download(SESSION_FILE);
-    if (error || !data) return null;
-    const text = await data.text();
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
+  const { data, error } = await supabase
+    .storage.from(SESSION_BUCKET)
+    .download(SESSION_FILE);
+  if (error || !data) return null;
+  const text = await data.text();
+  return JSON.parse(text);
 }
 
 async function saveSession(session) {
@@ -42,7 +38,7 @@ async function saveSession(session) {
 const app = express();
 app.use(express.json());
 
-// Endpoint que n8n usará para enviar mensajes
+// Endpoint para que n8n envíe mensajes
 app.post('/send-message', async (req, res) => {
   const { to, body } = req.body;
   if (!whatsappClient) return res.status(503).send('WhatsApp no inicializado');
@@ -55,18 +51,21 @@ app.post('/send-message', async (req, res) => {
   }
 });
 
-// (Opcional) endpoint para debug/webhook de WhatsApp
+// (Opcional) endpoint de debug
 app.post('/webhook/new-message', (req, res) => {
   console.log('Webhook hit:', req.body);
   res.sendStatus(200);
 });
 
-// Inicialización de WhatsApp
 let whatsappClient;
 async function initWhatsApp() {
+  // Saneamos el clientId (solo alfanumérico, underscores o guiones)
+  const rawId = SESSION_FILE || 'omega_session';
+  const clientId = rawId.replace(/[^a-zA-Z0-9_-]/g, '_');
+
   const sessionData = await getSession();
   whatsappClient = new Client({
-    authStrategy: new LocalAuth({ clientId: SESSION_FILE }),
+    authStrategy: new LocalAuth({ clientId }),
     session: sessionData
   });
 
@@ -92,6 +91,6 @@ async function initWhatsApp() {
 
 initWhatsApp();
 
-// Arrancamos servidor
+// Arrancamos servidor HTTP
 const port = PORT || 3000;
 app.listen(port, () => console.log(`Server escuchando en puerto ${port}`));
