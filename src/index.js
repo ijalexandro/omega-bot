@@ -27,6 +27,38 @@ let whatsappClient, latestQr = null;
 let globalCatalog = null;
 const processedMessages = new Set(); // Para evitar procesar el mismo mensaje más de una vez
 
+// Función para convertir Buffers a un formato serializable
+function bufferToSerializable(obj) {
+  if (Buffer.isBuffer(obj)) {
+    return { type: 'Buffer', data: Array.from(obj) };
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(bufferToSerializable);
+  }
+  if (obj && typeof obj === 'object') {
+    return Object.fromEntries(
+      Object.entries(obj).map(([key, value]) => [key, bufferToSerializable(value)])
+    );
+  }
+  return obj;
+}
+
+// Función para restaurar Buffers desde el formato serializable
+function serializableToBuffer(obj) {
+  if (obj && obj.type === 'Buffer' && Array.isArray(obj.data)) {
+    return Buffer.from(obj.data);
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(serializableToBuffer);
+  }
+  if (obj && typeof obj === 'object') {
+    return Object.fromEntries(
+      Object.entries(obj).map(([key, value]) => [key, serializableToBuffer(value)])
+    );
+  }
+  return obj;
+}
+
 async function loadSession() {
   console.log('📂 Intentando cargar sesión desde Supabase Storage...');
   try {
@@ -38,7 +70,10 @@ async function loadSession() {
       return null;
     }
     const sessionData = await data.text();
-    return JSON.parse(sessionData);
+    const parsedData = JSON.parse(sessionData);
+    const restoredData = serializableToBuffer(parsedData);
+    console.log('📄 Sesión cargada:', JSON.stringify(restoredData).slice(0, 100) + '...');
+    return restoredData;
   } catch (err) {
     console.error('❌ Excepción al cargar sesión:', err.message);
     return null;
@@ -48,9 +83,10 @@ async function loadSession() {
 async function saveSession(session) {
   console.log('💾 Intentando guardar sesión en Supabase Storage...', JSON.stringify(session).slice(0, 100) + '...');
   try {
+    const serializableSession = bufferToSerializable(session);
     const { error } = await supabase.storage
       .from(SESSION_BUCKET)
-      .upload(SESSION_FILE, JSON.stringify(session), {
+      .upload(SESSION_FILE, JSON.stringify(serializableSession), {
         upsert: true,
       });
     if (error) {
