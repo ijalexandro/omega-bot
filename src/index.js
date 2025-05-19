@@ -32,11 +32,14 @@ async function loadSession() {
     const { data, error } = await supabase.storage
       .from(SESSION_BUCKET)
       .download(SESSION_FILE);
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Error descargando sesión:', error.message, error.details);
+      return null;
+    }
     const sessionData = await data.text();
     return JSON.parse(sessionData);
   } catch (err) {
-    console.error('❌ Error descargando sesión:', err, err.message, err.details);
+    console.error('❌ Excepción al cargar sesión:', err.message);
     return null;
   }
 }
@@ -49,10 +52,13 @@ async function saveSession(session) {
       .upload(SESSION_FILE, JSON.stringify(session), {
         upsert: true,
       });
-    if (error) throw error;
-    console.log('✅ Sesión guardada correctamente en Supabase Storage');
+    if (error) {
+      console.error('❌ Error guardando sesión:', error.message, error.details);
+    } else {
+      console.log('✅ Sesión guardada correctamente en Supabase Storage');
+    }
   } catch (err) {
-    console.error('❌ Error guardando sesión:', err);
+    console.error('❌ Excepción al guardar sesión:', err.message);
   }
 }
 
@@ -62,20 +68,25 @@ async function loadGlobalCatalog() {
     const { data, error } = await supabase
       .from('productos')
       .select('id, nombre, descripcion, precio, tamano, foto_url, categoria');
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Error al cargar el catálogo global:', error.message);
+      return null;
+    }
     globalCatalog = data;
     console.log('✅ Catálogo global cargado correctamente:', data.length, 'productos');
     return data;
   } catch (err) {
-    console.error('❌ Error al cargar el catálogo global:', err.message, err.details);
-    console.error('❌ Excepción al cargar el catálogo global:', err);
+    console.error('❌ Excepción al cargar el catálogo global:', err.message);
     return null;
   }
 }
 
 async function initWhatsApp() {
   console.log('📡 Iniciando cliente WhatsApp...');
-  const { state, saveCreds } = await useMultiFileAuthState('baileys_auth');
+  const { state, saveCreds } = await useMultiFileAuthState('baileys_auth', {
+    clear: false,
+    saveSession: saveSession,
+  });
 
   const client = makeWASocket({
     auth: state,
@@ -98,7 +109,7 @@ async function initWhatsApp() {
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
       if (shouldReconnect) initWhatsApp();
-      console.log('❌ WhatsApp desconectado:', lastDisconnect?.error);
+      console.log('❌ WhatsApp desconectado:', lastDisconnect?.error?.message);
     }
   });
 
@@ -107,8 +118,9 @@ async function initWhatsApp() {
     if (!msg.key.fromMe && msg.message) {
       console.log('📩 Mensaje entrante:', msg.key.remoteJid, msg.message.conversation);
 
+      // Guardar mensaje entrante
       try {
-        const { error } = await supabase
+        const { error, data } = await supabase
           .from('mensajes')
           .insert({
             whatsapp_from: msg.key.remoteJid,
@@ -116,12 +128,16 @@ async function initWhatsApp() {
             texto: msg.message.conversation || '',
             enviado_por_bot: false
           });
-        if (error) console.error('❌ Error guardando en DB:', error.message);
-        else console.log('🗄️ Mensaje guardado en DB');
+        if (error) {
+          console.error('❌ Error guardando mensaje entrante en DB:', error.message, error.details);
+        } else {
+          console.log('🗄️ Mensaje entrante guardado en DB correctamente, ID:', data[0]?.id);
+        }
       } catch (err) {
-        console.error('❌ Excepción al guardar en DB:', err);
+        console.error('❌ Excepción al guardar mensaje entrante en DB:', err.message);
       }
 
+      // Enviar a n8n
       try {
         await fetch(N8N_WEBHOOK_URL, {
           method: 'POST',
@@ -131,6 +147,30 @@ async function initWhatsApp() {
         console.log('➡️ Mensaje enviado a n8n');
       } catch (err) {
         console.error('❌ Error forward a n8n:', err.message);
+      }
+
+      // Enviar respuesta y guardarla
+      try {
+        const replyText = 'Hola, ¿en qué te puedo ayudar?';
+        await client.sendMessage(msg.key.remoteJid, { text: replyText });
+        console.log('✔️ Respuesta enviada a:', msg.key.remoteJid);
+
+        // Guardar la respuesta del bot
+        const { error, data } = await supabase
+          .from('mensajes')
+          .insert({
+            whatsapp_from: msg.key.participant || msg.key.remoteJid,
+            whatsapp_to: msg.key.remoteJid,
+            texto: replyText,
+            enviado_por_bot: true
+          });
+        if (error) {
+          console.error('❌ Error guardando respuesta del bot en DB:', error.message, error.details);
+        } else {
+          console.log('🗄️ Respuesta del bot guardada en DB correctamente, ID:', data[0]?.id);
+        }
+      } catch (err) {
+        console.error('❌ Error enviando o guardando respuesta del bot:', err.message);
       }
     }
   });
