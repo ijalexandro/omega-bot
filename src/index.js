@@ -1,4 +1,8 @@
 require('dotenv').config();
+const { default: makeWASocket, useSingleFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+console.log("DEBUG Baileys version:", require('@whiskeysockets/baileys/package.json').version);
+console.log("DEBUG typeof useSingleFileAuthState:", typeof useSingleFileAuthState);
+
 const express = require('express');
 const fetch = global.fetch || require('node-fetch');
 const { default: makeWASocket, useSingleFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
