@@ -6,7 +6,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const { createClient } = require('@supabase/supabase-js');
-
+ 
 const {
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
