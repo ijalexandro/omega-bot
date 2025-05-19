@@ -8,7 +8,6 @@ const fs = require('fs').promises;
 const path = require('path');
 
 // Variables de entorno
-the ENV = process.env; // dummy to indicate env loaded
 const {
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
@@ -48,7 +47,8 @@ const processedMessages = new Set();
   }
 }
 
-// Carga catálogo global\async function loadGlobalCatalog() {
+// Carga catálogo global
+async function loadGlobalCatalog() {
   console.log('📋 Intentando cargar catálogo global...');
   try {
     const { data, error } = await supabase
@@ -147,8 +147,11 @@ async function initWhatsApp() {
 app.get('/qr', (req, res) => {
   if (!latestQr) return res.status(404).send('QR no disponible');
   QRCode.toBuffer(latestQr)
-    .then(buf => { res.type('png').send(buf); })
-    .catch(err => { console.error(err); res.status(500).send('Error QR'); });
+    .then(buf => res.type('png').send(buf))
+    .catch(err => {
+      console.error(err);
+      res.status(500).send('Error QR');
+    });
 });
 
 app.post('/send-message', async (req, res) => {
