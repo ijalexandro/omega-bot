@@ -1,11 +1,10 @@
 require('dotenv').config();
 const express = require('express');
 const fetch = global.fetch || require('node-fetch');
-const { default: makeWASocket, useSingleFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const QRCode = require('qrcode');
 const { createClient } = require('@supabase/supabase-js');
 const fs = require('fs').promises;
-const path = require('path');
 
 // Variables de entorno
 const {
@@ -17,9 +16,6 @@ const {
   SESSION_BUCKET,
   SESSION_FILE
 } = process.env;
-
-// Ruta local para el archivo de credenciales de Baileys
-const AUTH_FILE = path.join(__dirname, 'baileys_auth.json');
 
 // Cliente Supabase
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -34,13 +30,16 @@ const processedMessages = new Set();
 
 // Descarga el archivo de auth desde Supabase si existe
 async function ensureAuthFile() {
+  const authDir = 'baileys_auth';
   try {
     const { data, error } = await supabase.storage
       .from(SESSION_BUCKET)
       .download(SESSION_FILE);
     if (!error && data) {
       const contents = await data.text();
-      await fs.writeFile(AUTH_FILE, contents, 'utf8');
+      // Escribe en el archivo credentials.json dentro de la carpeta
+      await fs.mkdir(authDir, { recursive: true });
+      await fs.writeFile(`${authDir}/credentials.json`, contents, 'utf8');
       console.log('📥 Auth file descargado de Supabase');
     }
   } catch (err) {
@@ -69,17 +68,17 @@ async function loadGlobalCatalog() {
 // Inicializa WhatsApp y Baileys
 async function initWhatsApp() {
   console.log('📡 Iniciando WhatsApp...');
-
   await ensureAuthFile();
 
-  const { state, saveCreds } = useSingleFileAuthState(AUTH_FILE);
+  const { state, saveCreds } = await useMultiFileAuthState('baileys_auth');
   const client = makeWASocket({ auth: state, printQRInTerminal: false });
 
   client.ev.on('creds.update', async () => {
     await saveCreds();
     try {
-      const fileContents = await fs.readFile(AUTH_FILE, 'utf8');
-      await supabase.storage.from(SESSION_BUCKET).upload(SESSION_FILE, fileContents, { upsert: true });
+      // Lee el archivo y lo sube a supabase storage
+      const cred = await fs.readFile('baileys_auth/credentials.json', 'utf8');
+      await supabase.storage.from(SESSION_BUCKET).upload(SESSION_FILE, cred, { upsert: true });
       console.log('📤 Auth file subido a Supabase');
     } catch (err) {
       console.error('❌ Error subiendo auth file:', err.message);
@@ -101,7 +100,8 @@ async function initWhatsApp() {
       const errMsg = lastDisconnect?.error?.message || 'Unknown';
       console.log('❌ WhatsApp desconectado:', errMsg);
       if (errMsg.includes('Connection Failure')) {
-        await fs.unlink(AUTH_FILE).catch(() => {});
+        // Limpia la carpeta de auth
+        await fs.rm('baileys_auth', { recursive: true, force: true }).catch(() => {});
         initWhatsApp();
       } else {
         const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
