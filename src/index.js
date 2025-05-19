@@ -99,6 +99,22 @@ async function saveSession(session) {
   }
 }
 
+async function deleteSession() {
+  console.log('🗑️ Eliminando sesión de Supabase Storage...');
+  try {
+    const { error } = await supabase.storage
+      .from(SESSION_BUCKET)
+      .remove([SESSION_FILE]);
+    if (error) {
+      console.error('❌ Error eliminando sesión:', error.message, error.details);
+    } else {
+      console.log('✅ Sesión eliminada correctamente de Supabase Storage');
+    }
+  } catch (err) {
+    console.error('❌ Excepción al eliminar sesión:', err.message);
+  }
+}
+
 async function loadGlobalCatalog() {
   console.log('📋 Intentando cargar catálogo global...');
   try {
@@ -155,13 +171,22 @@ async function initWhatsApp() {
       await loadGlobalCatalog();
     }
     if (connection === 'close') {
+      const errorMessage = lastDisconnect?.error?.message || 'Unknown error';
+      console.log('❌ WhatsApp desconectado:', errorMessage);
+      
+      // Si la conexión falla con "Connection Failure", eliminar la sesión y forzar un nuevo QR
+      if (errorMessage.includes('Connection Failure')) {
+        console.log('⚠️ Fallo de conexión detectado, eliminando sesión para forzar un nuevo QR...');
+        await deleteSession();
+        savedState = null; // Resetear la sesión cargada
+      }
+
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
       if (shouldReconnect) {
         console.log('⏳ Esperando 5 segundos antes de reconectar...');
-        await new Promise(resolve => setTimeout(resolve, 5000)); // Retraso de 5 segundos
+        await new Promise(resolve => setTimeout(resolve, 5000));
         initWhatsApp();
       }
-      console.log('❌ WhatsApp desconectado:', lastDisconnect?.error?.message);
     }
   });
 
