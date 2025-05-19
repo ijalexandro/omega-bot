@@ -77,8 +77,8 @@ async function initWhatsApp() {
   client.ev.on('creds.update', async () => {
     await saveCreds();
     try {
-      const file = await fs.readFile(AUTH_FILE, 'utf8');
-      await supabase.storage.from(SESSION_BUCKET).upload(SESSION_FILE, file, { upsert: true });
+      const fileContents = await fs.readFile(AUTH_FILE, 'utf8');
+      await supabase.storage.from(SESSION_BUCKET).upload(SESSION_FILE, fileContents, { upsert: true });
       console.log('📤 Auth file subido a Supabase');
     } catch (err) {
       console.error('❌ Error subiendo auth file:', err.message);
@@ -169,8 +169,12 @@ app.post('/send-message', async (req, res) => {
 
 app.post('/webhook/new-message', (_, res) => res.sendStatus(200));
 
-// Arrancar
-initWhatsApp().catch(e => console.error('❌ init error:', e));
+// Arrancar el servidor
+try {
+  initWhatsApp().catch(e => console.error('❌ init error:', e));
+} catch (e) {
+  console.error('❌ Error inicializando WhatsApp:', e);
+}
 
 const serverPort = PORT || 3000;
 app.listen(serverPort, () => console.log(`🚀 Server en puerto ${serverPort}`));
