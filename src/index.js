@@ -84,7 +84,10 @@ async function loadGlobalCatalog() {
 
 async function initWhatsApp() {
   console.log('📡 Iniciando cliente WhatsApp...');
-  const { state, saveCreds } = await useMultiFileAuthState('baileys_auth');
+
+  // Intentar cargar la sesión existente
+  let savedState = await loadSession();
+  const { state, saveCreds } = await useMultiFileAuthState(savedState || 'baileys_auth');
 
   const client = makeWASocket({
     auth: state,
@@ -110,7 +113,11 @@ async function initWhatsApp() {
     }
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      if (shouldReconnect) initWhatsApp();
+      if (shouldReconnect) {
+        console.log('⏳ Esperando 5 segundos antes de reconectar...');
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Retraso de 5 segundos
+        initWhatsApp();
+      }
       console.log('❌ WhatsApp desconectado:', lastDisconnect?.error?.message);
     }
   });
