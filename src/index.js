@@ -25,6 +25,7 @@ app.use(express.json());
 
 let whatsappClient, latestQr = null;
 let globalCatalog = null;
+const processedMessages = new Set(); // Para evitar procesar el mismo mensaje más de una vez
 
 async function loadSession() {
   console.log('📂 Intentando cargar sesión desde Supabase Storage...');
@@ -45,7 +46,7 @@ async function loadSession() {
 }
 
 async function saveSession(session) {
-  console.log('💾 Intentando guardar sesión en Supabase Storage...');
+  console.log('💾 Intentando guardar sesión en Supabase Storage...', JSON.stringify(session).slice(0, 100) + '...');
   try {
     const { error } = await supabase.storage
       .from(SESSION_BUCKET)
@@ -83,17 +84,18 @@ async function loadGlobalCatalog() {
 
 async function initWhatsApp() {
   console.log('📡 Iniciando cliente WhatsApp...');
-  const { state, saveCreds } = await useMultiFileAuthState('baileys_auth', {
-    clear: false,
-    saveSession: saveSession,
-  });
+  const { state, saveCreds } = await useMultiFileAuthState('baileys_auth');
 
   const client = makeWASocket({
     auth: state,
     printQRInTerminal: false,
   });
 
-  client.ev.on('creds.update', saveCreds);
+  client.ev.on('creds.update', async () => {
+    console.log('🔄 Credenciales actualizadas, guardando sesión...');
+    await saveSession(state);
+    await saveCreds();
+  });
 
   client.ev.on('connection.update', async (update) => {
     const { qr, connection, lastDisconnect } = update;
@@ -107,7 +109,7 @@ async function initWhatsApp() {
       await loadGlobalCatalog();
     }
     if (connection === 'close') {
-      const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
       if (shouldReconnect) initWhatsApp();
       console.log('❌ WhatsApp desconectado:', lastDisconnect?.error?.message);
     }
@@ -115,6 +117,15 @@ async function initWhatsApp() {
 
   client.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
+    const messageId = msg.key.id; // Identificador único del mensaje
+
+    // Evitar procesar el mismo mensaje más de una vez
+    if (processedMessages.has(messageId)) {
+      console.log('⚠️ Mensaje ya procesado, ignorando:', messageId);
+      return;
+    }
+    processedMessages.add(messageId);
+
     if (!msg.key.fromMe && msg.message) {
       console.log('📩 Mensaje entrante:', msg.key.remoteJid, msg.message.conversation);
 
@@ -127,11 +138,12 @@ async function initWhatsApp() {
             whatsapp_to: msg.key.participant || msg.key.remoteJid,
             texto: msg.message.conversation || '',
             enviado_por_bot: false
-          });
+          })
+          .select();
         if (error) {
           console.error('❌ Error guardando mensaje entrante en DB:', error.message, error.details);
         } else {
-          console.log('🗄️ Mensaje entrante guardado en DB correctamente, ID:', data[0]?.id);
+          console.log('🗄️ Mensaje entrante guardado en DB correctamente, ID:', data?.[0]?.id);
         }
       } catch (err) {
         console.error('❌ Excepción al guardar mensaje entrante en DB:', err.message);
@@ -163,11 +175,12 @@ async function initWhatsApp() {
             whatsapp_to: msg.key.remoteJid,
             texto: replyText,
             enviado_por_bot: true
-          });
+          })
+          .select();
         if (error) {
           console.error('❌ Error guardando respuesta del bot en DB:', error.message, error.details);
         } else {
-          console.log('🗄️ Respuesta del bot guardada en DB correctamente, ID:', data[0]?.id);
+          console.log('🗄️ Respuesta del bot guardada en DB correctamente, ID:', data?.[0]?.id);
         }
       } catch (err) {
         console.error('❌ Error enviando o guardando respuesta del bot:', err.message);
