@@ -2,7 +2,7 @@
 require('dotenv').config();
 const express = require('express');
 const fetch = global.fetch || require('node-fetch');
-const { default: makeWASocket, useMultiFileAuthState } = require('@adiwajshing/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const QRCode = require('qrcode');
 const { createClient } = require('@supabase/supabase-js');
@@ -89,11 +89,14 @@ async function initWhatsApp() {
     if (qr) {
       latestQr = qr;
       console.log('--- QR RECEIVED ---');
-      console.log(`🖼️  Escanea en tu navegador: ${BASE_URL}/qr`);
+      console.log(`🖼️ Escanea en tu navegador: ${BASE_URL}/qr`);
     }
-    if (connection === 'open') console.log('✅ WhatsApp listo');
+    if (connection === 'open') {
+      console.log('✅ WhatsApp listo');
+      await loadGlobalCatalog();
+    }
     if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401;
+      const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
       if (shouldReconnect) initWhatsApp();
       console.log('❌ WhatsApp desconectado:', lastDisconnect?.error);
     }
@@ -110,7 +113,7 @@ async function initWhatsApp() {
           .insert({
             whatsapp_from: msg.key.remoteJid,
             whatsapp_to: msg.key.participant || msg.key.remoteJid,
-            texto: msg.message.conversation,
+            texto: msg.message.conversation || '',
             enviado_por_bot: false
           });
         if (error) console.error('❌ Error guardando en DB:', error.message);
@@ -123,7 +126,7 @@ async function initWhatsApp() {
         await fetch(N8N_WEBHOOK_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: msg.key.remoteJid, body: msg.message.conversation })
+          body: JSON.stringify({ from: msg.key.remoteJid, body: msg.message.conversation || '' })
         });
         console.log('➡️ Mensaje enviado a n8n');
       } catch (err) {
@@ -132,7 +135,6 @@ async function initWhatsApp() {
     }
   });
 
-  await loadGlobalCatalog();
   whatsappClient = client;
 }
 
