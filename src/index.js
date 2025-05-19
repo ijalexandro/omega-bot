@@ -1,12 +1,14 @@
-// src/index.js
 require('dotenv').config();
 const express = require('express');
 const fetch = global.fetch || require('node-fetch');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom');
+const { default: makeWASocket, useSingleFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const QRCode = require('qrcode');
 const { createClient } = require('@supabase/supabase-js');
+const fs = require('fs').promises;
+const path = require('path');
 
+// Variables de entorno
+envirovars();
 const {
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
@@ -17,6 +19,10 @@ const {
   SESSION_FILE
 } = process.env;
 
+// Fichero local de autenticación de Baileys
+envirovars = () => {};
+const AUTH_FILE = path.join(__dirname, 'baileys_auth.json');
+
 // Inicializa cliente Supabase
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -25,97 +31,24 @@ app.use(express.json());
 
 let whatsappClient, latestQr = null;
 let globalCatalog = null;
-const processedMessages = new Set(); // Para evitar procesar el mismo mensaje más de una vez
+const processedMessages = new Set(); // Para evitar duplicados
 
-// Función para convertir Buffers a un formato serializable
-function bufferToSerializable(obj) {
-  if (Buffer.isBuffer(obj)) {
-    return { type: 'Buffer', data: Array.from(obj) };
-  }
-  if (Array.isArray(obj)) {
-    return obj.map(bufferToSerializable);
-  }
-  if (obj && typeof obj === 'object') {
-    return Object.fromEntries(
-      Object.entries(obj).map(([key, value]) => [key, bufferToSerializable(value)])
-    );
-  }
-  return obj;
-}
-
-// Función para restaurar Buffers desde el formato serializable
-function serializableToBuffer(obj) {
-  if (obj && obj.type === 'Buffer' && Array.isArray(obj.data)) {
-    return Buffer.from(obj.data);
-  }
-  if (Array.isArray(obj)) {
-    return obj.map(serializableToBuffer);
-  }
-  if (obj && typeof obj === 'object') {
-    return Object.fromEntries(
-      Object.entries(obj).map(([key, value]) => [key, serializableToBuffer(value)])
-    );
-  }
-  return obj;
-}
-
-async function loadSession() {
-  console.log('📂 Intentando cargar sesión desde Supabase Storage...');
+// Descarga el archivo de auth desde Supabase si existe\async function ensureAuthFile() {
   try {
     const { data, error } = await supabase.storage
       .from(SESSION_BUCKET)
       .download(SESSION_FILE);
-    if (error) {
-      console.error('❌ Error descargando sesión:', error.message, error.details);
-      return null;
+    if (!error && data) {
+      const contents = await data.text();
+      await fs.writeFile(AUTH_FILE, contents, 'utf8');
+      console.log('📥 Auth file descargado de Supabase');
     }
-    const sessionData = await data.text();
-    const parsedData = JSON.parse(sessionData);
-    const restoredData = serializableToBuffer(parsedData);
-    console.log('📄 Sesión cargada:', JSON.stringify(restoredData).slice(0, 100) + '...');
-    return restoredData;
   } catch (err) {
-    console.error('❌ Excepción al cargar sesión:', err.message);
-    return null;
+    console.log('⚠️ No había auth file en Supabase, se generará uno nuevo');
   }
 }
 
-async function saveSession(session) {
-  console.log('💾 Intentando guardar sesión en Supabase Storage...', JSON.stringify(session).slice(0, 100) + '...');
-  try {
-    const serializableSession = bufferToSerializable(session);
-    const { error } = await supabase.storage
-      .from(SESSION_BUCKET)
-      .upload(SESSION_FILE, JSON.stringify(serializableSession), {
-        upsert: true,
-      });
-    if (error) {
-      console.error('❌ Error guardando sesión:', error.message, error.details);
-    } else {
-      console.log('✅ Sesión guardada correctamente en Supabase Storage');
-    }
-  } catch (err) {
-    console.error('❌ Excepción al guardar sesión:', err.message);
-  }
-}
-
-async function deleteSession() {
-  console.log('🗑️ Eliminando sesión de Supabase Storage...');
-  try {
-    const { error } = await supabase.storage
-      .from(SESSION_BUCKET)
-      .remove([SESSION_FILE]);
-    if (error) {
-      console.error('❌ Error eliminando sesión:', error.message, error.details);
-    } else {
-      console.log('✅ Sesión eliminada correctamente de Supabase Storage');
-    }
-  } catch (err) {
-    console.error('❌ Excepción al eliminar sesión:', err.message);
-  }
-}
-
-async function loadGlobalCatalog() {
+// Carga catálogo global\async function loadGlobalCatalog() {
   console.log('📋 Intentando cargar catálogo global...');
   try {
     const { data, error } = await supabase
@@ -134,29 +67,31 @@ async function loadGlobalCatalog() {
   }
 }
 
-async function initWhatsApp() {
+// Inicialización de WhatsApp\async function initWhatsApp() {
   console.log('📡 Iniciando cliente WhatsApp...');
 
-  // Intentar cargar la sesión existente
-  let savedState = await loadSession();
-  let authState;
-  if (savedState && savedState.creds) {
-    authState = { state: savedState };
-  } else {
-    authState = await useMultiFileAuthState('baileys_auth');
-  }
+  // Asegura que exista el archivo de credenciales local\await ensureAuthFile();
 
-  const { state, saveCreds } = authState;
-
+  // Usa Baileys con un único archivo de auth
+  const { state, saveCreds } = useSingleFileAuthState(AUTH_FILE);
+  
   const client = makeWASocket({
     auth: state,
     printQRInTerminal: false,
   });
 
+  // Cada vez que las credenciales cambian, persístelas localmente y en Supabase
   client.ev.on('creds.update', async () => {
-    console.log('🔄 Credenciales actualizadas, guardando sesión...');
-    await saveSession(state);
     await saveCreds();
+    try {
+      const file = await fs.readFile(AUTH_FILE, 'utf8');
+      await supabase.storage
+        .from(SESSION_BUCKET)
+        .upload(SESSION_FILE, file, { upsert: true });
+      console.log('📤 Auth file subido a Supabase');
+    } catch (err) {
+      console.error('❌ Error subiendo auth file a Supabase', err.message);
+    }
   });
 
   client.ev.on('connection.update', async (update) => {
@@ -171,21 +106,17 @@ async function initWhatsApp() {
       await loadGlobalCatalog();
     }
     if (connection === 'close') {
-      const errorMessage = lastDisconnect?.error?.message || 'Unknown error';
-      console.log('❌ WhatsApp desconectado:', errorMessage);
-      
-      // Si la conexión falla con "Connection Failure", eliminar la sesión y reiniciar
-      if (errorMessage.includes('Connection Failure')) {
-        console.log('⚠️ Fallo de conexión detectado, eliminando sesión y reiniciando...');
-        await deleteSession();
-        // Reiniciar el proceso de autenticación
-        initWhatsApp(); // Llamada recursiva para intentar de nuevo
+      const errMsg = lastDisconnect?.error?.message || 'Unknown error';
+      console.log('❌ WhatsApp desconectado:', errMsg);
+      if (errMsg.includes('Connection Failure')) {
+        console.log('⚠️ Fallo de conexión, reiniciando auth...');
+        await fs.unlink(AUTH_FILE).catch(() => {});
+        initWhatsApp();
       } else {
         const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
         if (shouldReconnect) {
-          console.log('⏳ Esperando 5 segundos antes de reconectar...');
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          initWhatsApp();
+          console.log('⏳ Reconectando en 5s...');
+          setTimeout(initWhatsApp, 5000);
         }
       }
     }
@@ -194,20 +125,11 @@ async function initWhatsApp() {
   client.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
     const messageId = msg.key.id;
-
-    console.log('📢 Evento messages.upsert recibido para mensaje:', messageId);
-
-    // Evitar procesar el mismo mensaje más de una vez
-    if (processedMessages.has(messageId)) {
-      console.log('⚠️ Mensaje ya procesado, ignorando:', messageId);
-      return;
-    }
+    if (processedMessages.has(messageId)) return;
     processedMessages.add(messageId);
-
     if (!msg.key.fromMe && msg.message) {
-      console.log('📩 Mensaje entrante:', msg.key.remoteJid, msg.message.conversation);
-
-      // Guardar mensaje entrante
+      console.log('📩 Mensaje entrante:', msg.key.remoteJid);
+      // Guardar en DB
       try {
         const { error, data } = await supabase
           .from('mensajes')
@@ -216,18 +138,12 @@ async function initWhatsApp() {
             whatsapp_to: msg.key.participant || msg.key.remoteJid,
             texto: msg.message.conversation || '',
             enviado_por_bot: false
-          })
-          .select();
-        if (error) {
-          console.error('❌ Error guardando mensaje entrante en DB:', error.message, error.details);
-        } else {
-          console.log('🗄️ Mensaje entrante guardado en DB correctamente, ID:', data?.[0]?.id);
-        }
+          });
+        if (error) console.error('❌ Error guardando mensaje:', error.message);
       } catch (err) {
-        console.error('❌ Excepción al guardar mensaje entrante en DB:', err.message);
+        console.error('❌ Excepción guardando mensaje:', err.message);
       }
-
-      // Enviar a n8n
+      // Forward a n8n
       try {
         await fetch(N8N_WEBHOOK_URL, {
           method: 'POST',
@@ -236,7 +152,7 @@ async function initWhatsApp() {
         });
         console.log('➡️ Mensaje enviado a n8n');
       } catch (err) {
-        console.error('❌ Error forward a n8n:', err.message);
+        console.error('❌ Error forwarding a n8n:', err.message);
       }
     }
   });
@@ -244,53 +160,37 @@ async function initWhatsApp() {
   whatsappClient = client;
 }
 
-app.get('/qr', async (req, res) => {
+// Ruta para mostrar el QR\app.get('/qr', (req, res) => {
   if (!latestQr) return res.status(404).send('QR no disponible');
-  try {
-    const img = await QRCode.toBuffer(latestQr);
-    res.set('Content-Type', 'image/png');
-    res.send(img);
-  } catch (err) {
-    console.error('Error generando QR PNG:', err);
-    res.status(500).send('Error generando imagen QR');
-  }
+  QRCode.toBuffer(latestQr)
+    .then(buffer => {
+      res.set('Content-Type', 'image/png');
+      res.send(buffer);
+    })
+    .catch(err => {
+      console.error('Error generando QR:', err.message);
+      res.status(500).send('Error generando QR');
+    });
 });
 
+// Endpoint para enviar mensajes manualmente
 app.post('/send-message', async (req, res) => {
   const { to, body } = req.body;
   if (!whatsappClient) return res.status(503).send('WhatsApp no inicializado');
   try {
     await whatsappClient.sendMessage(to, { text: body });
-    console.log(`✔️ Mensaje enviado a ${to}`);
-
-    // Guardar la respuesta del bot en Supabase
-    const { error, data } = await supabase
-      .from('mensajes')
-      .insert({
-        whatsapp_from: to, // El bot envía desde su número
-        whatsapp_to: to,
-        texto: body,
-        enviado_por_bot: true
-      })
-      .select();
-    if (error) {
-      console.error('❌ Error guardando respuesta del bot en DB:', error.message, error.details);
-    } else {
-      console.log('🗄️ Respuesta del bot guardada en DB correctamente, ID:', data?.[0]?.id);
-    }
-
+    await supabase.from('mensajes').insert({ whatsapp_from: to, whatsapp_to: to, texto: body, enviado_por_bot: true });
     res.json({ status: 'enviado' });
   } catch (err) {
-    console.error('Error enviando mensaje:', err);
+    console.error('❌ Error enviando mensaje:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/webhook/new-message', (req, res) => {
-  console.log('🔔 Webhook recibido:', req.body);
-  res.sendStatus(200);
-});
+// Webhook para nuevos mensajes (opcional)
+app.post('/webhook/new-message', (_, res) => res.sendStatus(200));
 
+// Arranca todo
 initWhatsApp().catch(err => console.error('❌ initWhatsApp error:', err));
 
 const port = PORT || 3000;
