@@ -8,7 +8,7 @@ const fs = require('fs').promises;
 const path = require('path');
 
 // Variables de entorno
-envirovars();
+the ENV = process.env; // dummy to indicate env loaded
 const {
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
@@ -19,19 +19,19 @@ const {
   SESSION_FILE
 } = process.env;
 
-// Fichero local de autenticación de Baileys
-envirovars = () => {};
+// Ruta local para el archivo de credenciales de Baileys
 const AUTH_FILE = path.join(__dirname, 'baileys_auth.json');
 
-// Inicializa cliente Supabase
+// Cliente Supabase
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 const app = express();
 app.use(express.json());
 
-let whatsappClient, latestQr = null;
+let whatsappClient;
+let latestQr = null;
 let globalCatalog = null;
-const processedMessages = new Set(); // Para evitar duplicados
+const processedMessages = new Set();
 
 // Descarga el archivo de auth desde Supabase si existe\async function ensureAuthFile() {
   try {
@@ -55,42 +55,33 @@ const processedMessages = new Set(); // Para evitar duplicados
       .from('productos')
       .select('id, nombre, descripcion, precio, tamano, foto_url, categoria');
     if (error) {
-      console.error('❌ Error al cargar el catálogo global:', error.message);
-      return null;
+      console.error('❌ Error al cargar catálogo global:', error.message);
+      return;
     }
     globalCatalog = data;
-    console.log('✅ Catálogo global cargado correctamente:', data.length, 'productos');
-    return data;
+    console.log('✅ Catálogo global cargado:', data.length, 'productos');
   } catch (err) {
-    console.error('❌ Excepción al cargar el catálogo global:', err.message);
-    return null;
+    console.error('❌ Excepción cargando catálogo:', err.message);
   }
 }
 
-// Inicialización de WhatsApp\async function initWhatsApp() {
-  console.log('📡 Iniciando cliente WhatsApp...');
+// Inicializa WhatsApp y Baileys
+async function initWhatsApp() {
+  console.log('📡 Iniciando WhatsApp...');
 
-  // Asegura que exista el archivo de credenciales local\await ensureAuthFile();
+  await ensureAuthFile();
 
-  // Usa Baileys con un único archivo de auth
   const { state, saveCreds } = useSingleFileAuthState(AUTH_FILE);
-  
-  const client = makeWASocket({
-    auth: state,
-    printQRInTerminal: false,
-  });
+  const client = makeWASocket({ auth: state, printQRInTerminal: false });
 
-  // Cada vez que las credenciales cambian, persístelas localmente y en Supabase
   client.ev.on('creds.update', async () => {
     await saveCreds();
     try {
       const file = await fs.readFile(AUTH_FILE, 'utf8');
-      await supabase.storage
-        .from(SESSION_BUCKET)
-        .upload(SESSION_FILE, file, { upsert: true });
+      await supabase.storage.from(SESSION_BUCKET).upload(SESSION_FILE, file, { upsert: true });
       console.log('📤 Auth file subido a Supabase');
     } catch (err) {
-      console.error('❌ Error subiendo auth file a Supabase', err.message);
+      console.error('❌ Error subiendo auth file:', err.message);
     }
   });
 
@@ -99,60 +90,52 @@ const processedMessages = new Set(); // Para evitar duplicados
     if (qr) {
       latestQr = qr;
       console.log('--- QR RECEIVED ---');
-      console.log(`🖼️ Escanea en tu navegador: ${BASE_URL}/qr`);
+      console.log(`🖼️ Escanea aquí: ${BASE_URL}/qr`);
     }
     if (connection === 'open') {
       console.log('✅ WhatsApp listo');
       await loadGlobalCatalog();
     }
     if (connection === 'close') {
-      const errMsg = lastDisconnect?.error?.message || 'Unknown error';
+      const errMsg = lastDisconnect?.error?.message || 'Unknown';
       console.log('❌ WhatsApp desconectado:', errMsg);
       if (errMsg.includes('Connection Failure')) {
-        console.log('⚠️ Fallo de conexión, reiniciando auth...');
         await fs.unlink(AUTH_FILE).catch(() => {});
         initWhatsApp();
       } else {
         const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-        if (shouldReconnect) {
-          console.log('⏳ Reconectando en 5s...');
-          setTimeout(initWhatsApp, 5000);
-        }
+        if (shouldReconnect) setTimeout(initWhatsApp, 5000);
       }
     }
   });
 
-  client.ev.on('messages.upsert', async (m) => {
-    const msg = m.messages[0];
-    const messageId = msg.key.id;
-    if (processedMessages.has(messageId)) return;
-    processedMessages.add(messageId);
+  client.ev.on('messages.upsert', async ({ messages }) => {
+    const msg = messages[0];
+    const id = msg.key.id;
+    if (processedMessages.has(id)) return;
+    processedMessages.add(id);
     if (!msg.key.fromMe && msg.message) {
-      console.log('📩 Mensaje entrante:', msg.key.remoteJid);
-      // Guardar en DB
+      console.log('📩 Mensaje de', msg.key.remoteJid);
       try {
-        const { error, data } = await supabase
-          .from('mensajes')
-          .insert({
-            whatsapp_from: msg.key.remoteJid,
-            whatsapp_to: msg.key.participant || msg.key.remoteJid,
-            texto: msg.message.conversation || '',
-            enviado_por_bot: false
-          });
-        if (error) console.error('❌ Error guardando mensaje:', error.message);
-      } catch (err) {
-        console.error('❌ Excepción guardando mensaje:', err.message);
+        const { error } = await supabase.from('mensajes').insert({
+          whatsapp_from: msg.key.remoteJid,
+          whatsapp_to: msg.key.participant || msg.key.remoteJid,
+          texto: msg.message.conversation || '',
+          enviado_por_bot: false
+        });
+        if (error) console.error('❌ Error guardando:', error.message);
+      } catch (e) {
+        console.error('❌ Excepción:', e.message);
       }
-      // Forward a n8n
       try {
         await fetch(N8N_WEBHOOK_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ from: msg.key.remoteJid, body: msg.message.conversation || '' })
         });
-        console.log('➡️ Mensaje enviado a n8n');
-      } catch (err) {
-        console.error('❌ Error forwarding a n8n:', err.message);
+        console.log('➡️ Forward a n8n');
+      } catch (e) {
+        console.error('❌ Error forward n8n:', e.message);
       }
     }
   });
@@ -160,20 +143,14 @@ const processedMessages = new Set(); // Para evitar duplicados
   whatsappClient = client;
 }
 
-// Ruta para mostrar el QR\app.get('/qr', (req, res) => {
+// Rutas de Express
+app.get('/qr', (req, res) => {
   if (!latestQr) return res.status(404).send('QR no disponible');
   QRCode.toBuffer(latestQr)
-    .then(buffer => {
-      res.set('Content-Type', 'image/png');
-      res.send(buffer);
-    })
-    .catch(err => {
-      console.error('Error generando QR:', err.message);
-      res.status(500).send('Error generando QR');
-    });
+    .then(buf => { res.type('png').send(buf); })
+    .catch(err => { console.error(err); res.status(500).send('Error QR'); });
 });
 
-// Endpoint para enviar mensajes manualmente
 app.post('/send-message', async (req, res) => {
   const { to, body } = req.body;
   if (!whatsappClient) return res.status(503).send('WhatsApp no inicializado');
@@ -181,17 +158,16 @@ app.post('/send-message', async (req, res) => {
     await whatsappClient.sendMessage(to, { text: body });
     await supabase.from('mensajes').insert({ whatsapp_from: to, whatsapp_to: to, texto: body, enviado_por_bot: true });
     res.json({ status: 'enviado' });
-  } catch (err) {
-    console.error('❌ Error enviando mensaje:', err.message);
-    res.status(500).json({ error: err.message });
+  } catch (e) {
+    console.error('❌ Error enviando:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
-// Webhook para nuevos mensajes (opcional)
 app.post('/webhook/new-message', (_, res) => res.sendStatus(200));
 
-// Arranca todo
-initWhatsApp().catch(err => console.error('❌ initWhatsApp error:', err));
+// Arrancar
+initWhatsApp().catch(e => console.error('❌ init error:', e));
 
-const port = PORT || 3000;
-app.listen(port, () => console.log(`🚀 Server escuchando en puerto ${port}`));
+const serverPort = PORT || 3000;
+app.listen(serverPort, () => console.log(`🚀 Server en puerto ${serverPort}`));
