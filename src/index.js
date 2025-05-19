@@ -174,18 +174,19 @@ async function initWhatsApp() {
       const errorMessage = lastDisconnect?.error?.message || 'Unknown error';
       console.log('❌ WhatsApp desconectado:', errorMessage);
       
-      // Si la conexión falla con "Connection Failure", eliminar la sesión y forzar un nuevo QR
+      // Si la conexión falla con "Connection Failure", eliminar la sesión y reiniciar
       if (errorMessage.includes('Connection Failure')) {
-        console.log('⚠️ Fallo de conexión detectado, eliminando sesión para forzar un nuevo QR...');
+        console.log('⚠️ Fallo de conexión detectado, eliminando sesión y reiniciando...');
         await deleteSession();
-        savedState = null; // Resetear la sesión cargada
-      }
-
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      if (shouldReconnect) {
-        console.log('⏳ Esperando 5 segundos antes de reconectar...');
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        initWhatsApp();
+        // Reiniciar el proceso de autenticación
+        initWhatsApp(); // Llamada recursiva para intentar de nuevo
+      } else {
+        const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+        if (shouldReconnect) {
+          console.log('⏳ Esperando 5 segundos antes de reconectar...');
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          initWhatsApp();
+        }
       }
     }
   });
