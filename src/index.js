@@ -87,7 +87,14 @@ async function initWhatsApp() {
 
   // Intentar cargar la sesión existente
   let savedState = await loadSession();
-  const { state, saveCreds } = await useMultiFileAuthState(savedState || 'baileys_auth');
+  let authState;
+  if (savedState && savedState.creds) {
+    authState = { state: savedState };
+  } else {
+    authState = await useMultiFileAuthState('baileys_auth');
+  }
+
+  const { state, saveCreds } = authState;
 
   const client = makeWASocket({
     auth: state,
