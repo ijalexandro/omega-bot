@@ -117,7 +117,9 @@ async function initWhatsApp() {
 
   client.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
-    const messageId = msg.key.id; // Identificador único del mensaje
+    const messageId = msg.key.id;
+
+    console.log('📢 Evento messages.upsert recibido para mensaje:', messageId);
 
     // Evitar procesar el mismo mensaje más de una vez
     if (processedMessages.has(messageId)) {
@@ -160,31 +162,6 @@ async function initWhatsApp() {
       } catch (err) {
         console.error('❌ Error forward a n8n:', err.message);
       }
-
-      // Enviar respuesta y guardarla
-      try {
-        const replyText = 'Hola, ¿en qué te puedo ayudar?';
-        await client.sendMessage(msg.key.remoteJid, { text: replyText });
-        console.log('✔️ Respuesta enviada a:', msg.key.remoteJid);
-
-        // Guardar la respuesta del bot
-        const { error, data } = await supabase
-          .from('mensajes')
-          .insert({
-            whatsapp_from: msg.key.participant || msg.key.remoteJid,
-            whatsapp_to: msg.key.remoteJid,
-            texto: replyText,
-            enviado_por_bot: true
-          })
-          .select();
-        if (error) {
-          console.error('❌ Error guardando respuesta del bot en DB:', error.message, error.details);
-        } else {
-          console.log('🗄️ Respuesta del bot guardada en DB correctamente, ID:', data?.[0]?.id);
-        }
-      } catch (err) {
-        console.error('❌ Error enviando o guardando respuesta del bot:', err.message);
-      }
     }
   });
 
@@ -209,6 +186,23 @@ app.post('/send-message', async (req, res) => {
   try {
     await whatsappClient.sendMessage(to, { text: body });
     console.log(`✔️ Mensaje enviado a ${to}`);
+
+    // Guardar la respuesta del bot en Supabase
+    const { error, data } = await supabase
+      .from('mensajes')
+      .insert({
+        whatsapp_from: to, // El bot envía desde su número
+        whatsapp_to: to,
+        texto: body,
+        enviado_por_bot: true
+      })
+      .select();
+    if (error) {
+      console.error('❌ Error guardando respuesta del bot en DB:', error.message, error.details);
+    } else {
+      console.log('🗄️ Respuesta del bot guardada en DB correctamente, ID:', data?.[0]?.id);
+    }
+
     res.json({ status: 'enviado' });
   } catch (err) {
     console.error('Error enviando mensaje:', err);
