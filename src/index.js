@@ -32,7 +32,8 @@ let latestQr = null;
 let globalCatalog = null;
 const processedMessages = new Set();
 
-// Descarga el archivo de auth desde Supabase si existe\async function ensureAuthFile() {
+// Descarga el archivo de auth desde Supabase si existe
+async function ensureAuthFile() {
   try {
     const { data, error } = await supabase.storage
       .from(SESSION_BUCKET)
