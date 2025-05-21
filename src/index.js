@@ -2,7 +2,16 @@ require('dotenv').config();
 
 const express = require('express');
 const fetch = global.fetch || require('node-fetch');
-const { default: makeWASocket, useSingleFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const baileys = require('@whiskeysockets/baileys'); // Importa TODO el módulo
+
+// Debug directo de los exports de Baileys
+console.log("DEBUG Baileys exports:", Object.keys(baileys));
+
+// Ahora sí extrae las funciones que necesitas
+const makeWASocket = baileys.makeWASocket || baileys.default;
+const useSingleFileAuthState = baileys.useSingleFileAuthState;
+const DisconnectReason = baileys.DisconnectReason;
+
 const QRCode = require('qrcode');
 const { createClient } = require('@supabase/supabase-js');
 const fs = require('fs').promises;
@@ -22,7 +31,6 @@ const {
 // Ruta local para el archivo de credenciales de Baileys
 const AUTH_FILE = path.join(__dirname, 'baileys_auth.json');
 
-
 // Cliente Supabase
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -34,9 +42,10 @@ let latestQr = null;
 let globalCatalog = null;
 const processedMessages = new Set();
 
-// Logs detallados
+// Debug adicional
 console.log("DEBUG Baileys version:", require('@whiskeysockets/baileys/package.json').version);
 console.log("DEBUG typeof useSingleFileAuthState:", typeof useSingleFileAuthState);
+console.log("DEBUG typeof makeWASocket:", typeof makeWASocket);
 
 // Descarga el archivo de auth desde Supabase si existe (MODO BUFFER)
 async function ensureAuthFile() {
@@ -187,4 +196,3 @@ try {
 
 const serverPort = PORT || 3000;
 app.listen(serverPort, () => console.log(`🚀 Server en puerto ${serverPort}`));
-
