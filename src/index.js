@@ -1,6 +1,4 @@
 require('dotenv').config();
-console.log("DEBUG Baileys version:", require('@whiskeysockets/baileys/package.json').version);
-console.log("DEBUG typeof useSingleFileAuthState:", typeof useSingleFileAuthState);
 
 const express = require('express');
 const fetch = global.fetch || require('node-fetch');
@@ -24,6 +22,7 @@ const {
 // Ruta local para el archivo de credenciales de Baileys
 const AUTH_FILE = path.join(__dirname, 'baileys_auth.json');
 
+
 // Cliente Supabase
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -34,6 +33,10 @@ let whatsappClient;
 let latestQr = null;
 let globalCatalog = null;
 const processedMessages = new Set();
+
+// Logs detallados
+console.log("DEBUG Baileys version:", require('@whiskeysockets/baileys/package.json').version);
+console.log("DEBUG typeof useSingleFileAuthState:", typeof useSingleFileAuthState);
 
 // Descarga el archivo de auth desde Supabase si existe (MODO BUFFER)
 async function ensureAuthFile() {
